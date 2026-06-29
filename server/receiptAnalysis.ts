@@ -4,6 +4,21 @@ export type ReceiptAnalysis = {
   date: string;
 };
 
+type ReceiptBoundingBox = {
+  xMin: number;
+  yMin: number;
+  xMax: number;
+  yMax: number;
+};
+
+type DetectedReceipt = ReceiptAnalysis & {
+  boundingBox: ReceiptBoundingBox;
+};
+
+export type ReceiptAnalysisResult = {
+  receipts: DetectedReceipt[];
+};
+
 type AnalyzeReceiptOptions = {
   imageDataUrl: string;
   apiKey: string | undefined;
@@ -73,24 +88,39 @@ function getOutputText(response: AnthropicResponse): string | undefined {
   return response.content?.find((content) => content.type === "text" && content.text)?.text;
 }
 
-function parseAnalysis(text: string): ReceiptAnalysis {
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function parseAnalysis(text: string): ReceiptAnalysisResult {
   const parsed: unknown = JSON.parse(text);
   if (!parsed || typeof parsed !== "object") {
     throw new Error("Invalid structured output");
   }
 
-  const value = parsed as Partial<ReceiptAnalysis>;
-  if (
-    typeof value.storeName !== "string" ||
-    typeof value.amount !== "number" ||
-    !Number.isFinite(value.amount) ||
-    value.amount < 0 ||
-    typeof value.date !== "string"
-  ) {
-    throw new Error("Invalid receipt fields");
+  const receipts = (parsed as Partial<ReceiptAnalysisResult>).receipts;
+  if (!Array.isArray(receipts) || receipts.length > 12) {
+    throw new Error("Invalid receipt collection");
   }
 
-  return value as ReceiptAnalysis;
+  for (const receipt of receipts) {
+    const box = receipt?.boundingBox;
+    if (
+      typeof receipt?.storeName !== "string" ||
+      !isFiniteNumber(receipt.amount) ||
+      receipt.amount < 0 ||
+      typeof receipt.date !== "string" ||
+      !box ||
+      !isFiniteNumber(box.xMin) ||
+      !isFiniteNumber(box.yMin) ||
+      !isFiniteNumber(box.xMax) ||
+      !isFiniteNumber(box.yMax)
+    ) {
+      throw new Error("Invalid receipt fields");
+    }
+  }
+
+  return { receipts };
 }
 
 function anthropicError(status: number): ReceiptAnalysisError {
@@ -104,7 +134,7 @@ export async function analyzeReceiptWithAnthropic({
   imageDataUrl,
   apiKey,
   model = DEFAULT_MODEL,
-}: AnalyzeReceiptOptions): Promise<ReceiptAnalysis> {
+}: AnalyzeReceiptOptions): Promise<ReceiptAnalysisResult> {
   if (!apiKey) {
     throw new ReceiptAnalysisError("サーバーにAnthropic APIキーが設定されていません。", 503);
   }
@@ -119,7 +149,7 @@ export async function analyzeReceiptWithAnthropic({
     },
     body: JSON.stringify({
       model,
-      max_tokens: 512,
+      max_tokens: 1400,
       messages: [
         {
           role: "user",
@@ -134,7 +164,7 @@ export async function analyzeReceiptWithAnthropic({
             },
             {
               type: "text",
-              text: "この領収書から店舗名、支払合計金額、発行日を抽出してください。不明な文字列は空文字、金額不明は0、日付は判明する場合のみYYYY-MM-DD形式にしてください。",
+              text: "画像内に写っている領収書をすべて個別に検出してください。各領収書について店舗名、支払合計金額、発行日、画像内の外接矩形を抽出してください。外接矩形は画像左上を(0,0)、右下を(1000,1000)とする整数相当の座標です。不明な文字列は空文字、金額不明は0、日付は判明する場合のみYYYY-MM-DD形式にしてください。領収書がなければreceiptsを空配列にしてください。",
             },
           ],
         },
@@ -145,11 +175,34 @@ export async function analyzeReceiptWithAnthropic({
           schema: {
             type: "object",
             properties: {
-              storeName: { type: "string", description: "領収書を発行した店舗名" },
-              amount: { type: "number", description: "0以上で、通貨記号を除いた支払合計金額" },
-              date: { type: "string", description: "YYYY-MM-DD形式の発行日。不明なら空文字" },
+              receipts: {
+                type: "array",
+                description: "画像内で検出した領収書。上から下、左から右の順に並べる",
+                items: {
+                  type: "object",
+                  properties: {
+                    storeName: { type: "string", description: "領収書を発行した店舗名" },
+                    amount: { type: "number", description: "0以上で、通貨記号を除いた支払合計金額" },
+                    date: { type: "string", description: "YYYY-MM-DD形式の発行日。不明なら空文字" },
+                    boundingBox: {
+                      type: "object",
+                      description: "画像全体を1000x1000とした領収書の外接矩形。各値は0から1000",
+                      properties: {
+                        xMin: { type: "number" },
+                        yMin: { type: "number" },
+                        xMax: { type: "number" },
+                        yMax: { type: "number" },
+                      },
+                      required: ["xMin", "yMin", "xMax", "yMax"],
+                      additionalProperties: false,
+                    },
+                  },
+                  required: ["storeName", "amount", "date", "boundingBox"],
+                  additionalProperties: false,
+                },
+              },
             },
-            required: ["storeName", "amount", "date"],
+            required: ["receipts"],
             additionalProperties: false,
           },
         },

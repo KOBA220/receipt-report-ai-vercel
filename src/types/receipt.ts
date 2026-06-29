@@ -4,6 +4,21 @@ export type ReceiptAnalysis = {
   date: string;
 };
 
+export type ReceiptBoundingBox = {
+  xMin: number;
+  yMin: number;
+  xMax: number;
+  yMax: number;
+};
+
+export type DetectedReceipt = ReceiptAnalysis & {
+  boundingBox: ReceiptBoundingBox;
+};
+
+export type ReceiptAnalysisResult = {
+  receipts: DetectedReceipt[];
+};
+
 export type Receipt = ReceiptAnalysis & {
   id: string;
   imageDataUrl: string;

@@ -6,7 +6,8 @@ import { createId } from "@/lib/utils";
 type ReportStore = {
   reports: Report[];
   createReport: (input: ReportInput) => string;
-  addReceipt: (reportId: string, receipt: Omit<Receipt, "id" | "createdAt">) => void;
+  addReceipts: (reportId: string, receipts: Array<Omit<Receipt, "id" | "createdAt">>) => void;
+  deleteReceipt: (reportId: string, receiptId: string) => void;
   deleteReport: (reportId: string) => void;
   getReport: (reportId: string) => Report | undefined;
 };
@@ -29,19 +30,34 @@ export const useReportStore = create<ReportStore>()(
         set((state) => ({ reports: [report, ...state.reports] }));
         return id;
       },
-      addReceipt: (reportId, receiptInput) => {
-        const receipt: Receipt = {
+      addReceipts: (reportId, receiptInputs) => {
+        const now = new Date().toISOString();
+        const receipts: Receipt[] = receiptInputs.map((receiptInput) => ({
           ...receiptInput,
           id: createId("receipt"),
-          createdAt: new Date().toISOString(),
-        };
+          createdAt: now,
+        }));
         set((state) => ({
           reports: state.reports.map((report) =>
             report.id === reportId
               ? {
                   ...report,
-                  receipts: [receipt, ...report.receipts],
-                  updatedAt: new Date().toISOString(),
+                  receipts: [...receipts, ...report.receipts],
+                  updatedAt: now,
+                }
+              : report,
+          ),
+        }));
+      },
+      deleteReceipt: (reportId, receiptId) => {
+        const now = new Date().toISOString();
+        set((state) => ({
+          reports: state.reports.map((report) =>
+            report.id === reportId
+              ? {
+                  ...report,
+                  receipts: report.receipts.filter((receipt) => receipt.id !== receiptId),
+                  updatedAt: now,
                 }
               : report,
           ),

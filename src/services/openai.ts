@@ -1,19 +1,31 @@
-import type { ReceiptAnalysis } from "@/types/receipt";
+import type { DetectedReceipt, ReceiptAnalysisResult } from "@/types/receipt";
 
-type AnalyzeReceiptResponse = ReceiptAnalysis | { error: string };
+type AnalyzeReceiptResponse = ReceiptAnalysisResult | { error: string };
 
-function isReceiptAnalysis(value: unknown): value is ReceiptAnalysis {
+function isDetectedReceipt(value: unknown): value is DetectedReceipt {
   if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<ReceiptAnalysis>;
+  const candidate = value as Partial<DetectedReceipt>;
+  const box = candidate.boundingBox;
   return (
     typeof candidate.storeName === "string" &&
     typeof candidate.amount === "number" &&
     Number.isFinite(candidate.amount) &&
-    typeof candidate.date === "string"
+    typeof candidate.date === "string" &&
+    Boolean(box) &&
+    typeof box?.xMin === "number" &&
+    typeof box.yMin === "number" &&
+    typeof box.xMax === "number" &&
+    typeof box.yMax === "number"
   );
 }
 
-export async function analyzeReceiptImage(imageDataUrl: string): Promise<ReceiptAnalysis> {
+function isAnalysisResult(value: unknown): value is ReceiptAnalysisResult {
+  if (!value || typeof value !== "object") return false;
+  const receipts = (value as Partial<ReceiptAnalysisResult>).receipts;
+  return Array.isArray(receipts) && receipts.every(isDetectedReceipt);
+}
+
+export async function analyzeReceiptImage(imageDataUrl: string): Promise<ReceiptAnalysisResult> {
   const response = await fetch("/api/analyze-receipt", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -28,7 +40,7 @@ export async function analyzeReceiptImage(imageDataUrl: string): Promise<Receipt
     throw new Error("error" in data ? data.error : "領収書の解析に失敗しました。");
   }
 
-  if (!isReceiptAnalysis(data)) {
+  if (!isAnalysisResult(data)) {
     throw new Error("AI解析結果の形式が不正です。");
   }
 
