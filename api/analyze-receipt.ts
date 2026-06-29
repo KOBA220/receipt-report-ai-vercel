@@ -1,5 +1,5 @@
 import {
-  analyzeReceiptWithOpenAI,
+  analyzeReceiptWithAnthropic,
   getImageDataUrl,
   ReceiptAnalysisError,
 } from "../server/receiptAnalysis.js";
@@ -24,10 +24,10 @@ export default {
     try {
       const body: unknown = await request.json();
       const imageDataUrl = getImageDataUrl(body);
-      const analysis = await analyzeReceiptWithOpenAI({
+      const analysis = await analyzeReceiptWithAnthropic({
         imageDataUrl,
-        apiKey: process.env.OPENAI_API_KEY,
-        model: process.env.OPENAI_MODEL,
+        apiKey: process.env.ANTHROPIC_API_KEY,
+        model: process.env.ANTHROPIC_MODEL,
       });
       return Response.json(analysis, { headers: { "Cache-Control": "no-store" } });
     } catch (error) {

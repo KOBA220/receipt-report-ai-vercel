@@ -2,7 +2,7 @@ import path from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import {
-  analyzeReceiptWithOpenAI,
+  analyzeReceiptWithAnthropic,
   getImageDataUrl,
   ReceiptAnalysisError,
 } from "./server/receiptAnalysis";
@@ -43,10 +43,10 @@ function localReceiptApi(): Plugin {
               const parsed: unknown = JSON.parse(body);
               const imageDataUrl = getImageDataUrl(parsed);
               const env = loadEnv(server.config.mode, process.cwd(), "");
-              const result = await analyzeReceiptWithOpenAI({
+              const result = await analyzeReceiptWithAnthropic({
                 imageDataUrl,
-                apiKey: env.OPENAI_API_KEY,
-                model: env.OPENAI_MODEL,
+                apiKey: env.ANTHROPIC_API_KEY,
+                model: env.ANTHROPIC_MODEL,
               });
               response.statusCode = 200;
               response.end(JSON.stringify(result));

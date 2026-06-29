@@ -10,19 +10,26 @@ type AnalyzeReceiptOptions = {
   model?: string | undefined;
 };
 
-type OpenAIResponse = {
-  output?: Array<{
+type AnthropicResponse = {
+  content?: Array<{
     type?: string;
-    content?: Array<{
-      type?: string;
-      text?: string;
-    }>;
+    text?: string;
   }>;
-  error?: { message?: string };
+  stop_reason?: string | null;
+  error?: {
+    type?: string;
+    message?: string;
+  };
 };
 
-const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
-const DEFAULT_MODEL = "gpt-5.4-mini";
+type ImageSource = {
+  mediaType: "image/jpeg" | "image/png" | "image/webp";
+  data: string;
+};
+
+const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_VERSION = "2023-06-01";
+const DEFAULT_MODEL = "claude-sonnet-4-6";
 const MAX_DATA_URL_LENGTH = 3_500_000;
 const IMAGE_DATA_URL_PATTERN = /^data:image\/(?:jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$/;
 
@@ -52,14 +59,18 @@ export function getImageDataUrl(body: unknown): string {
   return imageDataUrl;
 }
 
-function getOutputText(response: OpenAIResponse): string | undefined {
-  for (const item of response.output ?? []) {
-    if (item.type !== "message") continue;
-    for (const content of item.content ?? []) {
-      if (content.type === "output_text" && content.text) return content.text;
-    }
+function parseImageDataUrl(imageDataUrl: string): ImageSource {
+  const match = /^data:(image\/(?:jpeg|jpg|png|webp));base64,(.+)$/.exec(imageDataUrl);
+  if (!match?.[1] || !match[2]) {
+    throw new ReceiptAnalysisError("画像データの形式が不正です。", 400);
   }
-  return undefined;
+
+  const mediaType = match[1] === "image/jpg" ? "image/jpeg" : match[1];
+  return { mediaType: mediaType as ImageSource["mediaType"], data: match[2] };
+}
+
+function getOutputText(response: AnthropicResponse): string | undefined {
+  return response.content?.find((content) => content.type === "text" && content.text)?.text;
 }
 
 function parseAnalysis(text: string): ReceiptAnalysis {
@@ -82,49 +93,60 @@ function parseAnalysis(text: string): ReceiptAnalysis {
   return value as ReceiptAnalysis;
 }
 
-export async function analyzeReceiptWithOpenAI({
+function anthropicError(status: number): ReceiptAnalysisError {
+  if (status === 401) return new ReceiptAnalysisError("Anthropic APIキーが無効です。Vercelの設定を確認してください。", 502);
+  if (status === 403) return new ReceiptAnalysisError("Anthropic APIを利用する権限がありません。", 502);
+  if (status === 429) return new ReceiptAnalysisError("AI解析が混み合っています。少し待ってから再試行してください。", 429);
+  return new ReceiptAnalysisError("Anthropic APIによる解析に失敗しました。", 502);
+}
+
+export async function analyzeReceiptWithAnthropic({
   imageDataUrl,
   apiKey,
   model = DEFAULT_MODEL,
 }: AnalyzeReceiptOptions): Promise<ReceiptAnalysis> {
   if (!apiKey) {
-    throw new ReceiptAnalysisError("サーバーにOpenAI APIキーが設定されていません。", 503);
+    throw new ReceiptAnalysisError("サーバーにAnthropic APIキーが設定されていません。", 503);
   }
 
-  const response = await fetch(OPENAI_RESPONSES_URL, {
+  const image = parseImageDataUrl(imageDataUrl);
+  const response = await fetch(ANTHROPIC_MESSAGES_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
+      "x-api-key": apiKey,
+      "anthropic-version": ANTHROPIC_VERSION,
     },
     body: JSON.stringify({
       model,
-      input: [
+      max_tokens: 512,
+      messages: [
         {
           role: "user",
           content: [
             {
-              type: "input_text",
-              text: "領収書から店舗名、支払合計金額、発行日を抽出してください。不明な文字列は空文字、金額不明は0、日付は判明する場合のみYYYY-MM-DD形式にしてください。",
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: image.mediaType,
+                data: image.data,
+              },
             },
             {
-              type: "input_image",
-              image_url: imageDataUrl,
-              detail: "high",
+              type: "text",
+              text: "この領収書から店舗名、支払合計金額、発行日を抽出してください。不明な文字列は空文字、金額不明は0、日付は判明する場合のみYYYY-MM-DD形式にしてください。",
             },
           ],
         },
       ],
-      text: {
+      output_config: {
         format: {
           type: "json_schema",
-          name: "receipt_analysis",
-          strict: true,
           schema: {
             type: "object",
             properties: {
               storeName: { type: "string", description: "領収書を発行した店舗名" },
-              amount: { type: "number", minimum: 0, description: "通貨記号を除いた支払合計金額" },
+              amount: { type: "number", description: "0以上で、通貨記号を除いた支払合計金額" },
               date: { type: "string", description: "YYYY-MM-DD形式の発行日。不明なら空文字" },
             },
             required: ["storeName", "amount", "date"],
@@ -135,13 +157,17 @@ export async function analyzeReceiptWithOpenAI({
     }),
   });
 
-  const data = (await response.json().catch(() => ({}))) as OpenAIResponse;
+  const data = (await response.json().catch(() => ({}))) as AnthropicResponse;
   if (!response.ok) {
-    console.error("OpenAI API error", response.status, data.error?.message ?? "Unknown error");
-    if (response.status === 429) {
-      throw new ReceiptAnalysisError("AI解析が混み合っています。少し待ってから再試行してください。", 429);
-    }
-    throw new ReceiptAnalysisError("OpenAI APIによる解析に失敗しました。", 502);
+    console.error("Anthropic API error", response.status, data.error?.type ?? "unknown", data.error?.message ?? "Unknown error");
+    throw anthropicError(response.status);
+  }
+
+  if (data.stop_reason === "refusal") {
+    throw new ReceiptAnalysisError("この画像はAIで解析できませんでした。", 422);
+  }
+  if (data.stop_reason === "max_tokens") {
+    throw new ReceiptAnalysisError("AI解析結果が途中で終了しました。もう一度お試しください。", 502);
   }
 
   const outputText = getOutputText(data);
@@ -152,7 +178,7 @@ export async function analyzeReceiptWithOpenAI({
   try {
     return parseAnalysis(outputText);
   } catch (error) {
-    console.error("Invalid OpenAI structured output", error);
+    console.error("Invalid Anthropic structured output", error);
     throw new ReceiptAnalysisError("AI解析結果の形式が不正です。", 502);
   }
 }
