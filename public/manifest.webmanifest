@@ -1,0 +1,17 @@
+{
+  "name": "Receipt AI Reports",
+  "short_name": "Receipt AI",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#0f766e",
+  "description": "スマホカメラで領収書を登録し、AI解析してレポート化するPWAです。",
+  "icons": [
+    {
+      "src": "/pwa-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
